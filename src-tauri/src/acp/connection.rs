@@ -24,9 +24,14 @@ impl Default for AcpConnectionConfig {
     }
 }
 
-/// 外部からACP接続に送るリクエスト。PR#4以降で拡張予定。
+/// 外部からACP接続に送るリクエスト。
 #[derive(Debug)]
 pub enum AcpRequest {
+    /// 新しいセッションを作成する
+    NewSession {
+        /// 作業ディレクトリ（絶対パス）
+        cwd: String,
+    },
     Shutdown,
 }
 
@@ -34,6 +39,8 @@ pub enum AcpRequest {
 #[derive(Debug)]
 pub enum AcpResponse {
     Ok,
+    /// セッション作成成功。セッションIDを含む。
+    SessionCreated(String),
     Error(String),
 }
 
@@ -111,10 +118,35 @@ pub fn start_acp_connection(config: AcpConnectionConfig) -> Result<AcpConnection
                 local_set
                     .run_until(async move {
                         match spawn_and_initialize(&config).await {
-                            Ok((_conn, _child)) => {
+                            Ok((conn, _child)) => {
                                 log::info!("ACP connection ready, waiting for requests...");
                                 while let Some((request, reply_tx)) = request_rx.recv().await {
                                     match request {
+                                        AcpRequest::NewSession { cwd } => {
+                                            let request = acp::NewSessionRequest::new(cwd);
+                                            match conn.new_session(request).await {
+                                                Ok(response) => {
+                                                    let session_id =
+                                                        response.session_id.to_string();
+                                                    log::info!(
+                                                        "ACP session created: {}",
+                                                        session_id
+                                                    );
+                                                    let _ = reply_tx.send(
+                                                        AcpResponse::SessionCreated(session_id),
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    log::error!(
+                                                        "Failed to create ACP session: {}",
+                                                        e
+                                                    );
+                                                    let _ = reply_tx.send(AcpResponse::Error(
+                                                        format!("Failed to create session: {}", e),
+                                                    ));
+                                                }
+                                            }
+                                        }
                                         AcpRequest::Shutdown => {
                                             log::info!("ACP shutdown requested");
                                             let _ = reply_tx.send(AcpResponse::Ok);
@@ -144,6 +176,22 @@ pub fn start_acp_connection(config: AcpConnectionConfig) -> Result<AcpConnection
 }
 
 impl AcpConnectionHandle {
+    /// 新しいACPセッションを作成する。
+    /// 成功した場合、セッションIDの文字列を返す。
+    pub async fn new_session(&self, cwd: String) -> Result<String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.request_tx
+            .send((AcpRequest::NewSession { cwd }, reply_tx))
+            .await
+            .context("ACP runtime is not running")?;
+
+        match reply_rx.await.context("ACP runtime dropped")? {
+            AcpResponse::SessionCreated(session_id) => Ok(session_id),
+            AcpResponse::Error(e) => anyhow::bail!(e),
+            other => anyhow::bail!("Unexpected response for NewSession: {:?}", other),
+        }
+    }
+
     /// ACP接続を終了する。
     pub async fn shutdown(&self) -> Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -155,6 +203,7 @@ impl AcpConnectionHandle {
         match reply_rx.await.context("ACP runtime dropped")? {
             AcpResponse::Ok => Ok(()),
             AcpResponse::Error(e) => anyhow::bail!(e),
+            other => anyhow::bail!("Unexpected response for Shutdown: {:?}", other),
         }
     }
 }
@@ -178,5 +227,22 @@ mod tests {
         };
         assert_eq!(config.agent_program, "/usr/local/bin/my-agent");
         assert_eq!(config.agent_args.len(), 1);
+    }
+
+    #[test]
+    fn test_acp_request_new_session() {
+        let request = AcpRequest::NewSession {
+            cwd: "/tmp/test-project".to_string(),
+        };
+        let debug_str = format!("{:?}", request);
+        assert!(debug_str.contains("NewSession"));
+        assert!(debug_str.contains("/tmp/test-project"));
+    }
+
+    #[test]
+    fn test_acp_response_session_created() {
+        let response = AcpResponse::SessionCreated("session-abc-123".to_string());
+        let debug_str = format!("{:?}", response);
+        assert!(debug_str.contains("session-abc-123"));
     }
 }

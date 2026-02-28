@@ -37,6 +37,7 @@ kaname/
         mod.rs      # モジュール公開
         client.rs   # KanameClient: acp::Client トレイト実装
         connection.rs # サブプロセス起動、stdio接続、initialize
+        state.rs      # AcpState, ConnectionStatus: 接続状態とセッション管理
       lib.rs        # Tauriアプリのメインロジック
       main.rs       # エントリーポイント
   docs/             # 設計ドキュメント
