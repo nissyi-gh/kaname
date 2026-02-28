@@ -29,16 +29,11 @@ impl acp::Client for KanameClient {
         );
 
         Ok(acp::RequestPermissionResponse::new(
-            acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
-                option_id,
-            )),
+            acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(option_id)),
         ))
     }
 
-    async fn session_notification(
-        &self,
-        args: acp::SessionNotification,
-    ) -> acp::Result<()> {
+    async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
         match &args.update {
             acp::SessionUpdate::AgentMessageChunk(chunk) => {
                 if let acp::ContentBlock::Text(text) = &chunk.content {
